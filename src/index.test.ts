@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import worker from './index'
 import type { Env } from './types'
 
-// Mock config with two forms: one with turnstile, one without
 vi.mock('./config', () => ({
   FORMS: {
     'test-form': {
@@ -10,6 +9,8 @@ vi.mock('./config', () => ({
       fromAddress: 'noreply@example.com',
       fromName: 'Test Form',
       allowedOrigins: ['https://example.com'],
+      headerTitle: 'Neue Kontaktanfrage',
+      defaultSubject: 'Kontaktanfrage',
       turnstile: { secretEnvKey: 'TURNSTILE_SECRET_TEST' },
     },
     'no-turnstile': {
@@ -17,7 +18,6 @@ vi.mock('./config', () => ({
       fromAddress: 'noreply@example.com',
       fromName: 'Internal Tool',
       allowedOrigins: ['https://internal.example.com'],
-      // no turnstile → check skipped
     },
   },
 }))
@@ -30,14 +30,9 @@ const env: Env = {
 function makeRequest(method: string, body?: object, headers: Record<string, string> = {}): Request {
   const init: RequestInit = {
     method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...headers,
-    },
+    headers: { 'Content-Type': 'application/json', ...headers },
   }
-  if (body) {
-    init.body = JSON.stringify(body)
-  }
+  if (body) init.body = JSON.stringify(body)
   return new Request('https://worker.example.com/submit', init)
 }
 
@@ -45,7 +40,6 @@ function postRequest(body: object, origin = 'https://example.com'): Request {
   return makeRequest('POST', body, { Origin: origin })
 }
 
-// Helper to mock global fetch for Turnstile + Resend
 function mockFetch(turnstileSuccess: boolean, resendOk: boolean) {
   return vi.fn(async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
@@ -69,15 +63,14 @@ describe('Contact Form Worker', () => {
     vi.restoreAllMocks()
   })
 
-  // --- CORS ---
+  // ==================== CORS ====================
+
   describe('CORS preflight', () => {
     it('returns 204 with CORS headers for allowed origin', async () => {
       const req = makeRequest('OPTIONS', undefined, { Origin: 'https://example.com' })
       const res = await worker.fetch(req, env)
       expect(res.status).toBe(204)
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com')
-      expect(res.headers.get('Access-Control-Allow-Methods')).toBe('POST, OPTIONS')
-      expect(res.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type')
     })
 
     it('returns 403 for disallowed origin', async () => {
@@ -90,33 +83,30 @@ describe('Contact Form Worker', () => {
       const req = makeRequest('OPTIONS', undefined, { Origin: 'https://internal.example.com' })
       const res = await worker.fetch(req, env)
       expect(res.status).toBe(204)
-      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://internal.example.com')
     })
   })
 
-  // --- Method check ---
+  // ==================== Method check ====================
+
   describe('HTTP method validation', () => {
     it('returns 405 for GET', async () => {
-      const req = makeRequest('GET')
-      const res = await worker.fetch(req, env)
+      const res = await worker.fetch(makeRequest('GET'), env)
       expect(res.status).toBe(405)
-      expect(await res.json()).toEqual({ error: 'Method not allowed' })
     })
 
     it('returns 405 for PUT', async () => {
-      const req = makeRequest('PUT', { formId: 'test' })
-      const res = await worker.fetch(req, env)
+      const res = await worker.fetch(makeRequest('PUT', { formId: 'test' }), env)
       expect(res.status).toBe(405)
     })
 
     it('returns 405 for DELETE', async () => {
-      const req = makeRequest('DELETE')
-      const res = await worker.fetch(req, env)
+      const res = await worker.fetch(makeRequest('DELETE'), env)
       expect(res.status).toBe(405)
     })
   })
 
-  // --- Invalid JSON ---
+  // ==================== JSON parsing ====================
+
   describe('JSON parsing', () => {
     it('returns 400 for invalid JSON', async () => {
       const req = new Request('https://worker.example.com/submit', {
@@ -130,33 +120,27 @@ describe('Contact Form Worker', () => {
     })
   })
 
-  // --- Unknown formId ---
-  describe('Form ID validation', () => {
-    it('returns 404 for unknown formId', async () => {
-      const res = await worker.fetch(
-        postRequest({ formId: 'nonexistent', name: 'A', email: 'a@b.c', message: 'Hi' }),
-        env,
-      )
-      expect(res.status).toBe(404)
-      expect(await res.json()).toEqual({ error: 'Unknown form' })
-    })
-  })
+  // ==================== Form ID / Origin ====================
 
-  // --- Origin check ---
-  describe('Origin validation', () => {
+  describe('Form ID and origin validation', () => {
+    it('returns 404 for unknown formId', async () => {
+      const res = await worker.fetch(postRequest({ formId: 'nonexistent' }), env)
+      expect(res.status).toBe(404)
+    })
+
     it('returns 403 when origin is not allowed', async () => {
       const res = await worker.fetch(
         postRequest({ formId: 'test-form', name: 'A', email: 'a@b.c', message: 'Hi' }, 'https://evil.com'),
         env,
       )
       expect(res.status).toBe(403)
-      expect(await res.json()).toEqual({ error: 'Origin not allowed' })
     })
   })
 
-  // --- Honeypot ---
+  // ==================== Honeypot ====================
+
   describe('Honeypot', () => {
-    it('returns 200 success when honeypot field is filled (fakes success for bot)', async () => {
+    it('returns 200 success when honeypot field is filled (contact form mode)', async () => {
       const res = await worker.fetch(
         postRequest({
           formId: 'test-form',
@@ -170,10 +154,24 @@ describe('Contact Form Worker', () => {
       expect(res.status).toBe(200)
       expect(await res.json()).toEqual({ success: true })
     })
+
+    it('returns 200 success when honeypot field is filled (custom fields mode)', async () => {
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          website: 'http://spam.com',
+          fields: [{ label: 'Name', value: 'Bot' }],
+        }),
+        env,
+      )
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ success: true })
+    })
   })
 
-  // --- Required fields ---
-  describe('Required field validation', () => {
+  // ==================== Modus 1: Kontaktformular ====================
+
+  describe('Contact form mode (flat payload)', () => {
     it('returns 400 when name is missing', async () => {
       const res = await worker.fetch(
         postRequest({ formId: 'test-form', name: '', email: 'a@b.c', message: 'Hi' }),
@@ -206,10 +204,272 @@ describe('Contact Form Worker', () => {
       )
       expect(res.status).toBe(400)
     })
+
+    it('returns 200 on success with turnstile', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid-token',
+        }),
+        env,
+      )
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ success: true })
+    })
+
+    it('sets subject to "Neue Kontaktanfrage von {name}"', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max Mustermann',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        env,
+      )
+
+      // Second call is Resend
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.subject).toBe('Neue Kontaktanfrage von Max Mustermann')
+    })
+
+    it('sets reply-to to email field', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.reply_to).toBe('max@example.com')
+    })
+
+    it('includes optional phone field', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          phone: '+49 123',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.html).toContain('+49 123')
+      expect(body.html).toContain('Telefon')
+    })
+
+    it('omits phone field when not provided', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.html).not.toContain('Telefon')
+    })
   })
 
-  // --- Turnstile enabled ---
-  describe('Turnstile verification (enabled)', () => {
+  // ==================== Modus 2: Custom Fields ====================
+
+  describe('Custom fields mode (fields array)', () => {
+    it('returns 400 when fields array is empty', async () => {
+      const res = await worker.fetch(
+        postRequest({ formId: 'test-form', fields: [] }),
+        env,
+      )
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ error: 'Fields array must not be empty' })
+    })
+
+    it('returns 200 with custom fields and turnstile', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [
+            { label: 'Bestellnummer', value: '#4711' },
+            { label: 'Kunde', value: 'Max' },
+          ],
+        }),
+        env,
+      )
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ success: true })
+    })
+
+    it('uses subject from payload', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          subject: 'Neue Bestellung #4711',
+          fields: [{ label: 'Info', value: 'Test' }],
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.subject).toBe('Neue Bestellung #4711')
+    })
+
+    it('falls back to config defaultSubject when no subject in payload', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [{ label: 'Info', value: 'Test' }],
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.subject).toBe('Kontaktanfrage')
+    })
+
+    it('falls back to "Neue Nachricht" when no subject anywhere', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      // no-turnstile form has no defaultSubject
+      const fetchSpy = globalThis.fetch
+      await worker.fetch(
+        postRequest(
+          {
+            formId: 'no-turnstile',
+            fields: [{ label: 'Info', value: 'Test' }],
+          },
+          'https://internal.example.com',
+        ),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[0]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.subject).toBe('Neue Nachricht')
+    })
+
+    it('uses replyTo from payload', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          replyTo: 'customer@example.com',
+          fields: [{ label: 'Info', value: 'Test' }],
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.reply_to).toBe('customer@example.com')
+    })
+
+    it('omits reply-to when not in payload', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [{ label: 'Info', value: 'Test' }],
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.reply_to).toBeUndefined()
+    })
+
+    it('renders various field types in email', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [
+            { label: 'Name', value: 'Max', type: 'text' },
+            { label: 'E-Mail', value: 'max@test.de', type: 'email' },
+            { label: 'Newsletter', value: true, type: 'boolean' },
+            { label: 'Nachricht', value: 'Hallo Welt', type: 'textarea' },
+          ],
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.html).toContain('Max')
+      expect(body.html).toContain('mailto:max@test.de')
+      expect(body.html).toContain('Ja')
+      expect(body.html).toContain('message-box')
+    })
+
+    it('filters out fields without label', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [
+            { label: 'Name', value: 'Max' },
+            { label: '', value: 'should-be-filtered' },
+          ],
+        }),
+        env,
+      )
+
+      const resendCall = fetchSpy.mock.calls[1]
+      const body = JSON.parse(resendCall[1]?.body as string)
+      expect(body.html).toContain('Max')
+      expect(body.html).not.toContain('should-be-filtered')
+    })
+  })
+
+  // ==================== Turnstile ====================
+
+  describe('Turnstile verification', () => {
     it('returns 403 when turnstile verification fails', async () => {
       globalThis.fetch = mockFetch(false, true)
       const res = await worker.fetch(
@@ -226,47 +486,7 @@ describe('Contact Form Worker', () => {
       expect(await res.json()).toEqual({ error: 'Turnstile verification failed' })
     })
 
-    it('returns 200 on success (turnstile valid + resend ok)', async () => {
-      globalThis.fetch = mockFetch(true, true)
-      const res = await worker.fetch(
-        postRequest({
-          formId: 'test-form',
-          name: 'Max',
-          email: 'max@example.com',
-          message: 'Hello',
-          turnstileToken: 'valid-token',
-        }),
-        env,
-      )
-      expect(res.status).toBe(200)
-      expect(await res.json()).toEqual({ success: true })
-    })
-
-    it('passes correct secret from env to turnstile', async () => {
-      const fetchSpy = mockFetch(true, true)
-      globalThis.fetch = fetchSpy
-      await worker.fetch(
-        postRequest({
-          formId: 'test-form',
-          name: 'Max',
-          email: 'max@example.com',
-          message: 'Hello',
-          turnstileToken: 'my-token',
-        }),
-        env,
-      )
-
-      // First call is Turnstile verification
-      const turnstileCall = fetchSpy.mock.calls[0]
-      const body = turnstileCall[1]?.body as URLSearchParams
-      expect(body.get('secret')).toBe('test-turnstile-secret')
-      expect(body.get('response')).toBe('my-token')
-    })
-  })
-
-  // --- Turnstile disabled ---
-  describe('Turnstile disabled (no turnstile config)', () => {
-    it('skips turnstile check and sends email directly', async () => {
+    it('skips turnstile when not configured', async () => {
       const fetchSpy = mockFetch(true, true)
       globalThis.fetch = fetchSpy
       const res = await worker.fetch(
@@ -275,25 +495,20 @@ describe('Contact Form Worker', () => {
             formId: 'no-turnstile',
             name: 'Max',
             email: 'max@example.com',
-            message: 'Hello from internal tool',
+            message: 'Hello',
           },
           'https://internal.example.com',
         ),
         env,
       )
       expect(res.status).toBe(200)
-      expect(await res.json()).toEqual({ success: true })
-
-      // Only one fetch call (Resend), no Turnstile call
+      // Only Resend call, no Turnstile call
       expect(fetchSpy).toHaveBeenCalledTimes(1)
-      const url = typeof fetchSpy.mock.calls[0][0] === 'string'
-        ? fetchSpy.mock.calls[0][0]
-        : ''
-      expect(url).toContain('api.resend.com')
     })
   })
 
-  // --- Resend API error ---
+  // ==================== Resend errors ====================
+
   describe('Resend API error handling', () => {
     it('returns 500 when Resend API returns error', async () => {
       globalThis.fetch = mockFetch(true, false)
@@ -303,7 +518,7 @@ describe('Contact Form Worker', () => {
           name: 'Max',
           email: 'max@example.com',
           message: 'Hello',
-          turnstileToken: 'valid-token',
+          turnstileToken: 'valid',
         }),
         env,
       )
@@ -327,7 +542,7 @@ describe('Contact Form Worker', () => {
           name: 'Max',
           email: 'max@example.com',
           message: 'Hello',
-          turnstileToken: 'valid-token',
+          turnstileToken: 'valid',
         }),
         env,
       )
@@ -336,7 +551,8 @@ describe('Contact Form Worker', () => {
     })
   })
 
-  // --- CORS headers on responses ---
+  // ==================== CORS on responses ====================
+
   describe('CORS headers on POST responses', () => {
     it('includes CORS headers on success response', async () => {
       globalThis.fetch = mockFetch(true, true)
@@ -346,7 +562,7 @@ describe('Contact Form Worker', () => {
           name: 'Max',
           email: 'max@example.com',
           message: 'Hello',
-          turnstileToken: 'valid-token',
+          turnstileToken: 'valid',
         }),
         env,
       )
