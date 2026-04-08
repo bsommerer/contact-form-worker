@@ -90,6 +90,7 @@ export default {
         },
         body: JSON.stringify({
           from: `${config.fromName} <${config.fromAddress}>`,
+          reply_to: data.email,
           to: config.recipients,
           subject: `Neue Kontaktanfrage von ${data.name}`,
           html: buildEmailHtml({
@@ -97,6 +98,9 @@ export default {
             email: data.email,
             phone: data.phone,
             message: data.message,
+            formName: config.fromName,
+            turnstileVerified: !!config.turnstile,
+            timestamp: new Date(),
           }),
         }),
       })
