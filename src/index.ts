@@ -3,6 +3,18 @@ import { verifyTurnstile } from './turnstile'
 import { buildEmailHtml } from './email-template'
 import type { Env, FieldData, NormalizedSubmission } from './types'
 
+/** Reads the per-form Turnstile secret from the consolidated TURNSTILE_SECRETS JSON map. */
+function getTurnstileSecret(env: Env, formId: string | undefined): string | undefined {
+  if (!formId || !env.TURNSTILE_SECRETS) return undefined
+  try {
+    const map = JSON.parse(env.TURNSTILE_SECRETS) as Record<string, string>
+    return map[formId]
+  } catch {
+    console.error('TURNSTILE_SECRETS is not valid JSON')
+    return undefined
+  }
+}
+
 function jsonResponse(data: object, status = 200, corsOrigin?: string): Response {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (corsOrigin) {
@@ -119,9 +131,9 @@ export default {
 
     // 5. Verify Turnstile token (if enabled for this form)
     if (config.turnstile) {
-      const secret = env[config.turnstile.secretEnvKey]
+      const secret = getTurnstileSecret(env, formId)
       if (!secret) {
-        console.error(`Turnstile secret not found for env key: ${config.turnstile.secretEnvKey}`)
+        console.error(`Turnstile secret not found for formId "${formId}" in TURNSTILE_SECRETS`)
         return jsonResponse({ error: 'Internal server error' }, 500, origin)
       }
       const ip = request.headers.get('CF-Connecting-IP')

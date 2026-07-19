@@ -11,20 +11,21 @@ vi.mock('./config', () => ({
       allowedOrigins: ['https://example.com'],
       headerTitle: 'Neue Kontaktanfrage',
       defaultSubject: 'Kontaktanfrage',
-      turnstile: { secretEnvKey: 'TURNSTILE_SECRET_TEST' },
+      turnstile: true,
     },
     'no-turnstile': {
       recipients: ['team@example.com'],
       fromAddress: 'noreply@example.com',
       fromName: 'Internal Tool',
       allowedOrigins: ['https://internal.example.com'],
+      turnstile: false,
     },
   },
 }))
 
 const env: Env = {
   RESEND_API_KEY: 'test-resend-key',
-  TURNSTILE_SECRET_TEST: 'test-turnstile-secret',
+  TURNSTILE_SECRETS: JSON.stringify({ 'test-form': 'test-turnstile-secret' }),
 }
 
 function makeRequest(method: string, body?: object, headers: Record<string, string> = {}): Request {
@@ -484,6 +485,61 @@ describe('Contact Form Worker', () => {
       )
       expect(res.status).toBe(403)
       expect(await res.json()).toEqual({ error: 'Turnstile verification failed' })
+    })
+
+    it('returns 500 when turnstile is enabled but no secret exists for the formId', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const envWithoutSecret: Env = { RESEND_API_KEY: 'test-resend-key', TURNSTILE_SECRETS: JSON.stringify({}) }
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        envWithoutSecret,
+      )
+      expect(res.status).toBe(500)
+    })
+
+    it('returns 500 when TURNSTILE_SECRETS is malformed JSON', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const badEnv: Env = { RESEND_API_KEY: 'test-resend-key', TURNSTILE_SECRETS: '{not-json' }
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        badEnv,
+      )
+      expect(res.status).toBe(500)
+    })
+
+    it('looks up the secret by formId (only the matching form verifies)', async () => {
+      const fetchSpy = mockFetch(true, true)
+      globalThis.fetch = fetchSpy
+      const scopedEnv: Env = {
+        RESEND_API_KEY: 'test-resend-key',
+        TURNSTILE_SECRETS: JSON.stringify({ 'test-form': 'secret-a', 'other-form': 'secret-b' }),
+      }
+      await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        scopedEnv,
+      )
+      // First call is Turnstile verify — assert it used this form's secret
+      const verifyCall = fetchSpy.mock.calls[0]
+      const sentBody = verifyCall[1]?.body as URLSearchParams
+      expect(sentBody.get('secret')).toBe('secret-a')
     })
 
     it('skips turnstile when not configured', async () => {

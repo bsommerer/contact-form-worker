@@ -3,10 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "generate": "node scripts/generate-forms.mjs",
+    "predev": "npm run generate",
     "dev": "wrangler dev",
+    "predeploy": "npm run generate",
     "deploy": "wrangler deploy",
+    "pretest": "npm run generate",
     "test": "vitest run",
+    "pretest:watch": "npm run generate",
     "test:watch": "vitest",
+    "pretypecheck": "npm run generate",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

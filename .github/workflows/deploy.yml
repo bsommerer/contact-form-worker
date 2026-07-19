@@ -1,27 +1,84 @@
-name: Deploy
+name: Deploy (reusable)
+
+# Reusable workflow. A config repo calls this to deploy the worker to Cloudflare
+# with ITS OWN forms/ and secrets. The engine repo itself does NOT auto-deploy —
+# production is driven entirely by the config repo (GitOps).
+#
+# Usage from a config repo (.github/workflows/deploy.yml):
+#   jobs:
+#     deploy:
+#       uses: bsommerer/contact-form-worker/.github/workflows/deploy.yml@main
+#       secrets:
+#         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         RESEND_API_KEY:       ${{ secrets.RESEND_API_KEY }}
+#         TURNSTILE_SECRETS:    ${{ secrets.TURNSTILE_SECRETS }}
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      engine_ref:
+        description: Git ref (tag/branch) of the engine to build from
+        type: string
+        default: main
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      RESEND_API_KEY:
+        required: true
+      TURNSTILE_SECRETS:
+        required: false
 
 jobs:
-  check:
-    uses: ./.github/workflows/ci.yml
-
   deploy:
-    needs: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout config repo (caller)
+        uses: actions/checkout@v4
+        with:
+          path: config
+
+      - name: Checkout engine
+        uses: actions/checkout@v4
+        with:
+          repository: bsommerer/contact-form-worker
+          ref: ${{ inputs.engine_ref }}
+          path: engine
+
+      - name: Inject forms from config repo
+        run: |
+          rm -rf engine/forms
+          cp -r config/forms engine/forms
 
       - uses: actions/setup-node@v4
         with:
-          node-version-file: .nvmrc
+          node-version-file: engine/.nvmrc
           cache: npm
+          cache-dependency-path: engine/package-lock.json
 
       - run: npm ci
+        working-directory: engine
+
+      - name: Generate, typecheck & test (blocks broken config)
+        working-directory: engine
+        run: |
+          npm run generate
+          npm run typecheck
+          npm test
 
       - name: Deploy to Cloudflare
+        working-directory: engine
         run: npx wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Sync secrets to worker
+        working-directory: engine
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          TURNSTILE_SECRETS: ${{ secrets.TURNSTILE_SECRETS }}
+        run: |
+          printf '%s' "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY
+          if [ -n "$TURNSTILE_SECRETS" ]; then
+            printf '%s' "$TURNSTILE_SECRETS" | npx wrangler secret put TURNSTILE_SECRETS
+          fi

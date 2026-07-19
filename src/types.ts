@@ -1,6 +1,8 @@
 export interface Env {
   RESEND_API_KEY: string
-  [key: string]: string // Dynamische Turnstile Secrets pro Form
+  // JSON-Map formId -> Turnstile-Secret, z.B. {"bs-itservices":"0x…"}.
+  // Wird als EIN Cloudflare-Secret gepflegt (siehe README / Deploy-Workflow).
+  TURNSTILE_SECRETS?: string
 }
 
 export interface FormConfig {
@@ -10,9 +12,7 @@ export interface FormConfig {
   allowedOrigins: string[]
   headerTitle?: string       // Email-Überschrift, Default: "Neue Nachricht"
   defaultSubject?: string    // Fallback wenn Client keinen Subject schickt
-  turnstile?: {
-    secretEnvKey: string
-  }
+  turnstile?: boolean        // true → Turnstile-Token wird geprüft (Secret via TURNSTILE_SECRETS[formId])
 }
 
 // --- Modus 1: Einfaches Kontaktformular (flat payload) ---
