@@ -100,6 +100,22 @@ describe('buildForms', () => {
     expect(forms.a.turnstile).toBe(false)
   })
 
+  it('unions allowedOrigins from _defaults into every form (does not override)', () => {
+    const { forms } = buildForms(
+      { a: { ...valid, allowedOrigins: ['https://a.de'] } },
+      { fromAddress: 'noreply@example.com', allowedOrigins: ['https://*.bs-it-services.workers.dev'] },
+    )
+    expect(forms.a.allowedOrigins).toEqual(['https://a.de', 'https://*.bs-it-services.workers.dev'])
+  })
+
+  it('dedupes an origin present in both the form and the defaults', () => {
+    const { forms } = buildForms(
+      { a: { ...valid, allowedOrigins: ['https://a.de', 'https://shared.de'] } },
+      { allowedOrigins: ['https://shared.de'] },
+    )
+    expect(forms.a.allowedOrigins).toEqual(['https://a.de', 'https://shared.de'])
+  })
+
   it('collects errors per file and omits invalid forms', () => {
     const { forms, errors } = buildForms({
       good: valid,

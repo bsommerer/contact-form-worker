@@ -29,9 +29,32 @@ function isLocalhostOrigin(origin: string): boolean {
   }
 }
 
-/** True if the origin is explicitly configured for the form OR a localhost origin. */
+/**
+ * Matches an incoming Origin against a single allowedOrigins entry.
+ * Supports an exact string match plus a subdomain wildcard of the form
+ * "https://*.example.com", which matches the apex (example.com) and any
+ * subdomain (foo.example.com, a.b.example.com) — mirroring how Cloudflare
+ * Turnstile treats a configured hostname. The scheme must match exactly.
+ */
+function originMatchesPattern(origin: string, pattern: string): boolean {
+  if (origin === pattern) return true
+  const wildcard = pattern.match(/^(https?):\/\/\*\.(.+)$/i)
+  if (!wildcard) return false
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return false
+  }
+  if (url.protocol !== `${wildcard[1].toLowerCase()}:`) return false
+  const suffix = wildcard[2].toLowerCase()
+  const host = url.hostname.toLowerCase()
+  return host === suffix || host.endsWith(`.${suffix}`)
+}
+
+/** True if the origin is a localhost origin OR matches any allowedOrigins entry (exact or wildcard). */
 function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
-  return isLocalhostOrigin(origin) || allowedOrigins.includes(origin)
+  return isLocalhostOrigin(origin) || allowedOrigins.some(pattern => originMatchesPattern(origin, pattern))
 }
 
 /** Reads the per-form Turnstile secret from the consolidated TURNSTILE_SECRETS JSON map. */
@@ -145,7 +168,9 @@ export default {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       const origin = request.headers.get('Origin') ?? ''
-      const allowed = isLocalhostOrigin(origin) || Object.values(FORMS).some(f => f.allowedOrigins.includes(origin))
+      const allowed =
+        isLocalhostOrigin(origin) ||
+        Object.values(FORMS).some(f => f.allowedOrigins.some(pattern => originMatchesPattern(origin, pattern)))
       if (!allowed) return new Response(null, { status: 403 })
       return new Response(null, {
         status: 204,

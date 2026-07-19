@@ -74,7 +74,16 @@ export function buildForms(rawById, defaults = {}) {
   const forms = {}
   const errors = []
   for (const formId of Object.keys(rawById).sort()) {
-    const cfg = { turnstile: false, ...defaults, ...rawById[formId] }
+    const raw = rawById[formId]
+    const cfg = { turnstile: false, ...defaults, ...raw }
+    // allowedOrigins from _defaults apply to EVERY form (e.g. a shared
+    // *.workers.dev origin): union the default and per-form lists rather than
+    // letting the per-form list replace the defaults.
+    const defaultOrigins = Array.isArray(defaults.allowedOrigins) ? defaults.allowedOrigins : []
+    const rawOrigins = Array.isArray(raw?.allowedOrigins) ? raw.allowedOrigins : []
+    if (defaultOrigins.length || rawOrigins.length) {
+      cfg.allowedOrigins = [...new Set([...rawOrigins, ...defaultOrigins])]
+    }
     const formErrors = validateForm(formId, cfg)
     if (formErrors.length > 0) {
       for (const e of formErrors) errors.push(`${formId}.json: ${e}`)

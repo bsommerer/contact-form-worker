@@ -43,6 +43,18 @@ describe('domainsFromAllowedOrigins', () => {
   it('returns [] for only-localhost origins', () => {
     expect(domainsFromAllowedOrigins(['http://localhost:1234'])).toEqual([])
   })
+  it('registers a subdomain wildcard as its bare apex hostname', () => {
+    // Turnstile covers subdomains of a configured hostname automatically, so the
+    // "*." wildcard maps to the plain apex domain.
+    expect(domainsFromAllowedOrigins(['https://*.bs-it-services.workers.dev'])).toEqual([
+      'bs-it-services.workers.dev',
+    ])
+  })
+  it('dedupes a wildcard apex against an explicit origin on the same host', () => {
+    expect(
+      domainsFromAllowedOrigins(['https://*.example.com', 'https://example.com', 'https://www.example.com']),
+    ).toEqual(['example.com', 'www.example.com'])
+  })
 })
 
 describe('planReconcile', () => {

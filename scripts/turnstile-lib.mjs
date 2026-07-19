@@ -15,11 +15,19 @@ export const formIdFromWidgetName = name =>
 export function domainsFromAllowedOrigins(allowedOrigins = []) {
   const out = new Set()
   for (const origin of allowedOrigins) {
+    // Subdomain wildcards ("https://*.example.com") register as the bare apex
+    // hostname ("example.com"): Turnstile has no wildcard syntax but covers
+    // every subdomain of a configured hostname automatically.
+    const wildcard = String(origin).match(/^https?:\/\/\*\.(.+)$/i)
     let host
-    try {
-      host = new URL(origin).hostname.toLowerCase()
-    } catch {
-      continue
+    if (wildcard) {
+      host = wildcard[1].toLowerCase()
+    } else {
+      try {
+        host = new URL(origin).hostname.toLowerCase()
+      } catch {
+        continue
+      }
     }
     if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1') continue
     if (host) out.add(host)

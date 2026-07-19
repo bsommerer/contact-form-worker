@@ -8,7 +8,7 @@ vi.mock('./config', () => ({
       recipients: ['admin@example.com'],
       fromAddress: 'noreply@example.com',
       fromName: 'Test Form',
-      allowedOrigins: ['https://example.com'],
+      allowedOrigins: ['https://example.com', 'https://*.bs-it-services.workers.dev'],
       headerTitle: 'Neue Kontaktanfrage',
       defaultSubject: 'Kontaktanfrage',
       turnstile: true,
@@ -92,6 +92,35 @@ describe('Contact Form Worker', () => {
         expect(res.status, origin).toBe(204)
         expect(res.headers.get('Access-Control-Allow-Origin'), origin).toBe(origin)
       }
+    })
+
+    it('returns 204 for any subdomain matched by a wildcard origin (apex + subdomains)', async () => {
+      for (const origin of [
+        'https://bs-it-services.workers.dev',
+        'https://florian.bs-it-services.workers.dev',
+        'https://a.b.bs-it-services.workers.dev',
+      ]) {
+        const res = await worker.fetch(makeRequest('OPTIONS', undefined, { Origin: origin }), env)
+        expect(res.status, origin).toBe(204)
+        expect(res.headers.get('Access-Control-Allow-Origin'), origin).toBe(origin)
+      }
+    })
+
+    it('rejects a look-alike host that only ends with the wildcard suffix string', async () => {
+      // "evil-bs-it-services.workers.dev" must NOT match "*.bs-it-services.workers.dev".
+      const res = await worker.fetch(
+        makeRequest('OPTIONS', undefined, { Origin: 'https://evilbs-it-services.workers.dev' }),
+        env,
+      )
+      expect(res.status).toBe(403)
+    })
+
+    it('rejects an http origin against an https-only wildcard (scheme must match)', async () => {
+      const res = await worker.fetch(
+        makeRequest('OPTIONS', undefined, { Origin: 'http://x.bs-it-services.workers.dev' }),
+        env,
+      )
+      expect(res.status).toBe(403)
     })
   })
 
@@ -233,6 +262,17 @@ describe('Contact Form Worker', () => {
       )
       expect(res.status).toBe(200)
       expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
+    })
+
+    it('accepts POST from a wildcard-matched subdomain origin', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const origin = 'https://florian.bs-it-services.workers.dev'
+      const res = await worker.fetch(
+        postRequest({ formId: 'test-form', name: 'A', email: 'a@b.c', message: 'Hi', turnstileToken: 'ok' }, origin),
+        env,
+      )
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe(origin)
     })
   })
 
