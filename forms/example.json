@@ -1,0 +1,9 @@
+{
+  "recipients": ["you@example.com"],
+  "fromName": "Example Website",
+  "fromAddress": "noreply@example.com",
+  "allowedOrigins": ["https://example.com", "http://localhost:5173"],
+  "headerTitle": "Neue Kontaktanfrage",
+  "defaultSubject": "Neue Kontaktanfrage",
+  "turnstile": false
+}

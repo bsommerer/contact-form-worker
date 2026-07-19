@@ -1,0 +1,57 @@
+name: Validate config (reusable)
+
+# Reusable workflow for config repos to validate their forms/ on pull requests,
+# WITHOUT deploying. Compiles the caller's forms against the engine and runs the
+# full check suite, so a broken or malformed form file fails the PR.
+#
+# Usage from a config repo (.github/workflows/ci.yml):
+#   on:
+#     pull_request:
+#   jobs:
+#     validate:
+#       uses: bsommerer/contact-form-worker/.github/workflows/validate.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      engine_ref:
+        description: Git ref (tag/branch) of the engine to validate against
+        type: string
+        default: main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout config repo (caller)
+        uses: actions/checkout@v4
+        with:
+          path: config
+
+      - name: Checkout engine
+        uses: actions/checkout@v4
+        with:
+          repository: bsommerer/contact-form-worker
+          ref: ${{ inputs.engine_ref }}
+          path: engine
+
+      - name: Inject forms from config repo
+        run: |
+          rm -rf engine/forms
+          cp -r config/forms engine/forms
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: engine/.nvmrc
+          cache: npm
+          cache-dependency-path: engine/package-lock.json
+
+      - run: npm ci
+        working-directory: engine
+
+      - name: Generate, typecheck & test
+        working-directory: engine
+        run: |
+          npm run generate
+          npm run typecheck
+          npm test

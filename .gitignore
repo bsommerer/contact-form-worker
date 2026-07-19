@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+
+# Build-Artefakt aus forms/*.json (via npm run generate)
+src/forms.generated.ts
