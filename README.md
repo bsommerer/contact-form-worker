@@ -98,7 +98,9 @@ Bei `turnstile: true` legt der Deploy-Workflow automatisch ein **managed Widget*
 - **Secret** → wird als `TURNSTILE_SECRETS`-Map (JSON `formId → secret`) an den Worker gepusht. Es liegt **nie** in Git oder GitHub und wird in den Logs maskiert.
 - **Sitekey** (öffentlich) → wird als `TURNSTILE_SITEKEYS`-Map an den Worker gepusht und über `GET /config/<formId>` ausgeliefert.
 
-Du pflegst also **keine Turnstile-Secrets mehr manuell**. Ein bestehendes, händisch angelegtes Widget wird — wenn seine Domains zum Formular passen — automatisch _übernommen_ (umbenannt auf `cfcf:<formId>`), ohne Keys zu ändern. Details im Config-Repo.
+Du pflegst also **keine Turnstile-Secrets mehr manuell**.
+
+Es werden **ausschließlich** Widgets mit dem `cfcf:`-Präfix verwaltet. Händisch angelegte Widgets werden **komplett ignoriert** (nie gelesen, geändert oder gelöscht) — hat ein `turnstile:true`-Formular noch kein `cfcf:`-Widget, wird ein **neues** angelegt. Migrierst du eine bestehende Seite, ändert sich dadurch ihr Sitekey; hol den neuen per `GET /config/<formId>` und trag ihn im Frontend ein. Details im Config-Repo.
 
 ## Die API richtig nutzen (Frontend)
 
@@ -164,10 +166,23 @@ Feld-Typen: `text`, `email`, `phone`, `url`, `textarea`, `boolean`.
 | Status | Bedeutung |
 |--------|-----------|
 | `200 {success:true}` | versendet (bzw. Honeypot ausgelöst) |
-| `400` | Pflichtfelder fehlen / ungültiges JSON |
+| `400` | Pflichtfelder fehlen / ungültiges JSON / Payload-Limit überschritten (zu viele Felder, Feld zu lang) |
 | `403` | Origin nicht erlaubt **oder** Turnstile fehlgeschlagen |
 | `404` | unbekannte `formId` |
+| `413` | Request-Body zu groß (> 512 KB) |
+| `429` | Rate-Limit überschritten |
 | `500` | Konfig-/Serverfehler |
+
+## Missbrauchsschutz (Spam / Flooding)
+
+Mehrere Schichten begrenzen automatisierten Missbrauch:
+
+- **Rate-Limiting** — pro IP + `formId` via Cloudflare [Rate Limiting Binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) (`RATE_LIMITER` in `wrangler.toml`, Default **20 Submissions / 60s**). Bremst Floods und schützt das Resend-Kontingent. Hinweis: Das Binding zählt aktuell pro Rechenzentrum (colo), nicht global exakt.
+- **Payload-Limits** — großzügig, aber gegen E-Mail-Bombing: Body ≤ **512 KB**, ≤ **50 Felder**, Label ≤ **200** Zeichen, Feldwert ≤ **50 000** Zeichen. Anpassbar in `src/index.ts`.
+- **Turnstile** (`turnstile: true`) — die wirksamste Barriere gegen Bots; für öffentliche Formulare empfohlen.
+- **Honeypot** (`website`-Feld) — fängt einfache Formular-Auto-Filler.
+
+> **Hinweis zur Origin-Prüfung:** `allowedOrigins` ist ein CORS-/UX-Feature, **kein** Missbrauchsschutz — der `Origin`-Header ist von Nicht-Browser-Clients frei setzbar. Der reale Botschutz stützt sich auf Turnstile + Rate-Limiting.
 
 ## Setup
 

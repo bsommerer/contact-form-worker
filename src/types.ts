@@ -1,3 +1,12 @@
+/**
+ * Cloudflare Rate Limiting Binding (siehe wrangler.toml).
+ * Hinweis: Das Binding zählt aktuell pro Rechenzentrum (colo), nicht global —
+ * es bremst Floods trotzdem massiv aus, ist aber kein exaktes globales Limit.
+ */
+export interface RateLimiter {
+  limit(options: { key: string }): Promise<{ success: boolean }>
+}
+
 export interface Env {
   RESEND_API_KEY: string
   // JSON-Map formId -> Turnstile-Secret, z.B. {"my-site":"0x…"}.
@@ -6,6 +15,8 @@ export interface Env {
   // JSON-Map formId -> Turnstile-Sitekey (ÖFFENTLICH). Vom Reconcile-Schritt
   // gesetzt; über GET /config/<formId> abrufbar.
   TURNSTILE_SITEKEYS?: string
+  // Rate-Limiting-Binding (optional; ohne Binding wird Rate-Limiting übersprungen).
+  RATE_LIMITER?: RateLimiter
 }
 
 export interface FormConfig {

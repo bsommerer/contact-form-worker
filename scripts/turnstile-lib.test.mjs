@@ -52,7 +52,6 @@ describe('planReconcile', () => {
   it('creates a widget for a new turnstile form', () => {
     const plan = planReconcile([form('neu', ['neu.de'])], [])
     expect(plan.create).toEqual([{ formId: 'neu', name: 'cfcf:neu', domains: ['neu.de'] }])
-    expect(plan.adopt).toEqual([])
     expect(plan.delete).toEqual([])
   })
 
@@ -71,37 +70,18 @@ describe('planReconcile', () => {
     expect(plan.keep).toEqual([])
   })
 
-  it('adopts a single unmanaged widget that covers the form domains (safe migration)', () => {
+  it('IGNORES unmanaged widgets and creates a fresh managed one (no adoption)', () => {
+    // An existing hand-made widget on the same domain must NOT be touched;
+    // a new cfcf: widget is created instead.
     const plan = planReconcile(
       [form('bs-itservices', ['bs-itservices.de'])],
-      [widget('0xOLD', 'BS IT Services', ['bs-itservices.de', 'localhost'])],
+      [widget('0xOLD', 'BS IT Services', ['bs-itservices.de'])],
     )
-    expect(plan.adopt).toEqual([
-      {
-        formId: 'bs-itservices',
-        sitekey: '0xOLD',
-        fromName: 'BS IT Services',
-        name: 'cfcf:bs-itservices',
-        domains: ['bs-itservices.de'],
-        domainsChanged: true,
-      },
-    ])
-    expect(plan.create).toEqual([])
-  })
-
-  it('does NOT adopt when multiple unmanaged widgets match (ambiguous → create)', () => {
-    const plan = planReconcile(
-      [form('a', ['a.de'])],
-      [widget('0x1', 'w1', ['a.de']), widget('0x2', 'w2', ['a.de'])],
-    )
-    expect(plan.adopt).toEqual([])
-    expect(plan.create).toEqual([{ formId: 'a', name: 'cfcf:a', domains: ['a.de'] }])
-  })
-
-  it('does NOT adopt an unmanaged widget that does not cover all form domains', () => {
-    const plan = planReconcile([form('a', ['a.de', 'www.a.de'])], [widget('0x1', 'w1', ['a.de'])])
-    expect(plan.adopt).toEqual([])
-    expect(plan.create.length).toBe(1)
+    expect(plan.create).toEqual([{ formId: 'bs-itservices', name: 'cfcf:bs-itservices', domains: ['bs-itservices.de'] }])
+    expect(plan.update).toEqual([])
+    expect(plan.keep).toEqual([])
+    // the unmanaged widget is neither adopted nor deleted
+    expect(plan.delete).toEqual([])
   })
 
   it('never touches unmanaged widgets for deletion', () => {
@@ -114,21 +94,12 @@ describe('planReconcile', () => {
     expect(plan.delete).toEqual([{ formId: 'removed', sitekey: '0xA', name: 'cfcf:removed' }])
   })
 
-  it('respects allowAdopt=false (always create)', () => {
-    const plan = planReconcile([form('a', ['a.de'])], [widget('0x1', 'w1', ['a.de'])], { allowAdopt: false })
-    expect(plan.adopt).toEqual([])
-    expect(plan.create.length).toBe(1)
-  })
-
-  it('does not adopt the same widget for two forms', () => {
-    // both forms could match the same widget by domain; only the first (sorted) adopts it
+  it('keeps a managed widget even if an unmanaged widget shares its domains', () => {
     const plan = planReconcile(
-      [form('a', ['shared.de']), form('b', ['shared.de'])],
-      [widget('0xS', 'shared widget', ['shared.de'])],
+      [form('a', ['a.de'])],
+      [widget('0xMAN', 'cfcf:a', ['a.de']), widget('0xUN', 'hand-made', ['a.de'])],
     )
-    const adoptedSitekeys = plan.adopt.map(a => a.sitekey)
-    expect(adoptedSitekeys).toEqual(['0xS'])
-    // the other form must be created, not double-adopting the same sitekey
-    expect(plan.create.length).toBe(1)
+    expect(plan.keep).toEqual([{ formId: 'a', sitekey: '0xMAN' }])
+    expect(plan.create).toEqual([])
   })
 })

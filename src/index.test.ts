@@ -705,6 +705,116 @@ describe('Contact Form Worker', () => {
     })
   })
 
+  // ==================== Rate limiting ====================
+
+  describe('Rate limiting', () => {
+    it('returns 429 when the rate limiter rejects the request', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const limitedEnv: Env = {
+        ...env,
+        RATE_LIMITER: { limit: vi.fn(async () => ({ success: false })) },
+      }
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        limitedEnv,
+      )
+      expect(res.status).toBe(429)
+      expect(await res.json()).toEqual({ error: 'Rate limit exceeded' })
+    })
+
+    it('proceeds when the rate limiter allows the request', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const limitFn = vi.fn(async () => ({ success: true }))
+      const limitedEnv: Env = { ...env, RATE_LIMITER: { limit: limitFn } }
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        limitedEnv,
+      )
+      expect(res.status).toBe(200)
+      // keyed by formId + IP (IP header absent in test → 'unknown')
+      expect(limitFn).toHaveBeenCalledWith({ key: 'test-form:unknown' })
+    })
+
+    it('skips rate limiting when no binding is configured', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          name: 'Max',
+          email: 'max@example.com',
+          message: 'Hello',
+          turnstileToken: 'valid',
+        }),
+        env,
+      )
+      expect(res.status).toBe(200)
+    })
+  })
+
+  // ==================== Payload limits ====================
+
+  describe('Payload limits', () => {
+    it('returns 413 when the body exceeds the size limit', async () => {
+      const huge = 'x'.repeat(512 * 1024 + 1)
+      const req = new Request('https://worker.example.com/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: 'https://example.com' },
+        body: JSON.stringify({ formId: 'test-form', name: 'A', email: 'a@b.c', message: huge }),
+      })
+      const res = await worker.fetch(req, env)
+      expect(res.status).toBe(413)
+      expect(await res.json()).toEqual({ error: 'Payload too large' })
+    })
+
+    it('returns 400 when there are too many fields', async () => {
+      const fields = Array.from({ length: 51 }, (_, i) => ({ label: `F${i}`, value: 'x' }))
+      const res = await worker.fetch(
+        postRequest({ formId: 'test-form', turnstileToken: 'valid', fields }),
+        env,
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json() as { error: string }).error).toContain('Too many fields')
+    })
+
+    it('returns 400 when a field value is too long', async () => {
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [{ label: 'Info', value: 'x'.repeat(50_001) }],
+        }),
+        env,
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json() as { error: string }).error).toContain('value too long')
+    })
+
+    it('does not crash on malformed field entries (null / wrong shape)', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      const res = await worker.fetch(
+        postRequest({
+          formId: 'test-form',
+          turnstileToken: 'valid',
+          fields: [null, { label: 'Name', value: 'Max' }, { value: 'no-label' }],
+        }),
+        env,
+      )
+      expect(res.status).toBe(200)
+    })
+  })
+
   // ==================== CORS on responses ====================
 
   describe('CORS headers on POST responses', () => {

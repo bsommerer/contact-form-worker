@@ -5,6 +5,16 @@ import { buildSnippet } from './snippet'
 import type { Env, FieldData, NormalizedSubmission } from './types'
 
 /**
+ * Payload-Limits: großzügig gewählt, damit legitime Formulare weit darunter
+ * bleiben, aber E-Mail-Bombing / Amplification durch riesige Payloads verhindert
+ * wird. Werte sind bewusst hoch — anpassbar bei Bedarf.
+ */
+const MAX_BODY_BYTES = 512 * 1024 // 512 KB roher Request-Body
+const MAX_FIELDS = 50 // Felder pro Submission (Custom-Fields-Modus)
+const MAX_LABEL_LEN = 200 // Zeichen pro Feld-Label
+const MAX_VALUE_LEN = 50_000 // Zeichen pro Feldwert (Textarea großzügig)
+
+/**
  * Localhost origins (any port, http/https) are ALWAYS allowed, so local development
  * works out of the box without listing every dev-server port in each form's
  * allowedOrigins. Covers localhost, 127.0.0.1 and IPv6 loopback [::1].
@@ -76,7 +86,9 @@ function normalizePayload(data: Record<string, unknown>): NormalizedSubmission |
       website: data.website as string | undefined,
       subject: data.subject as string | undefined,
       replyTo: data.replyTo as string | undefined,
-      fields: fields.filter(f => f.label),
+      // Robust gegen fremde Payloads: nur echte Objekte mit nicht-leerem
+      // String-Label übernehmen (verhindert Crash bei null / falschem Shape).
+      fields: fields.filter(f => f && typeof f.label === 'string' && f.label.trim() !== ''),
     }
   }
 
@@ -107,6 +119,25 @@ function normalizePayload(data: Record<string, unknown>): NormalizedSubmission |
     replyTo: email,
     fields,
   }
+}
+
+/**
+ * Prüft die Payload-Limits nach der Normalisierung. Gibt eine Fehlermeldung
+ * zurück, wenn ein Limit überschritten ist, sonst null.
+ */
+function checkPayloadLimits(fields: FieldData[]): string | null {
+  if (fields.length > MAX_FIELDS) {
+    return `Too many fields (max ${MAX_FIELDS})`
+  }
+  for (const f of fields) {
+    if (typeof f.label === 'string' && f.label.length > MAX_LABEL_LEN) {
+      return `Field label too long (max ${MAX_LABEL_LEN} characters)`
+    }
+    if (typeof f.value === 'string' && f.value.length > MAX_VALUE_LEN) {
+      return `Field value too long (max ${MAX_VALUE_LEN} characters)`
+    }
+  }
+  return null
 }
 
 export default {
@@ -169,9 +200,16 @@ export default {
       return jsonResponse({ error: 'Method not allowed' }, 405)
     }
 
+    // Body als Text lesen, um die Größe zuverlässig zu begrenzen (unabhängig
+    // vom Content-Length-Header), erst danach parsen.
+    const bodyText = await request.text()
+    if (bodyText.length > MAX_BODY_BYTES) {
+      return jsonResponse({ error: 'Payload too large' }, 413)
+    }
+
     let rawData: Record<string, unknown>
     try {
-      rawData = await request.json()
+      rawData = JSON.parse(bodyText)
     } catch {
       return jsonResponse({ error: 'Invalid JSON' }, 400)
     }
@@ -189,18 +227,34 @@ export default {
       return jsonResponse({ error: 'Origin not allowed' }, 403)
     }
 
-    // 3. Honeypot check
+    // 3. Rate limiting per IP + formId (bremst Floods / schützt Resend-Kontingent).
+    //    Ohne RATE_LIMITER-Binding (z.B. in Tests) wird der Schritt übersprungen.
+    if (env.RATE_LIMITER) {
+      const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown'
+      const { success } = await env.RATE_LIMITER.limit({ key: `${formId}:${ip}` })
+      if (!success) {
+        return jsonResponse({ error: 'Rate limit exceeded' }, 429, origin)
+      }
+    }
+
+    // 4. Honeypot check
     if (rawData.website) {
       return jsonResponse({ success: true }, 200, origin)
     }
 
-    // 4. Normalize payload (validates per mode)
+    // 5. Normalize payload (validates per mode)
     const normalized = normalizePayload(rawData)
     if ('error' in normalized) {
       return jsonResponse({ error: normalized.error }, 400, origin)
     }
 
-    // 5. Verify Turnstile token (if enabled for this form)
+    // 6. Payload-Limits prüfen (Feldanzahl / Label- & Wertlängen)
+    const limitError = checkPayloadLimits(normalized.fields)
+    if (limitError) {
+      return jsonResponse({ error: limitError }, 400, origin)
+    }
+
+    // 7. Verify Turnstile token (if enabled for this form)
     if (config.turnstile) {
       const secret = getTurnstileSecret(env, formId)
       if (!secret) {
@@ -214,7 +268,7 @@ export default {
       }
     }
 
-    // 6. Send email via Resend
+    // 8. Send email via Resend
     const subject = normalized.subject ?? config.defaultSubject ?? 'Neue Nachricht'
 
     try {

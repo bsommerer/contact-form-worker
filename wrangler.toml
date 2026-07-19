@@ -1,3 +1,13 @@
 name = "contact-form"
 main = "src/index.ts"
 compatibility_date = "2025-04-01"
+
+# Rate-Limiting-Binding (pro IP + formId, siehe src/index.ts).
+# limit/period sind großzügig für ein Kontaktformular: max. 20 Submissions
+# je IP+Formular pro 60s. period unterstützt nur 10 oder 60 Sekunden.
+# namespace_id ist eine frei wählbare, pro Binding eindeutige ID.
+[[unsafe.bindings]]
+name = "RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 20, period = 60 }

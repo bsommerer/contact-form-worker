@@ -20,7 +20,7 @@ import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildForms } from './forms-lib.mjs'
-import { domainsFromAllowedOrigins, planReconcile, widgetName } from './turnstile-lib.mjs'
+import { domainsFromAllowedOrigins, planReconcile } from './turnstile-lib.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const FORMS_DIR = join(ROOT, 'forms')
@@ -98,13 +98,12 @@ async function main() {
   const desiredForms = readForms()
   const accountId = await resolveAccountId()
   const existing = await listWidgets(accountId)
-  const plan = planReconcile(desiredForms, existing, { allowAdopt: true })
+  const plan = planReconcile(desiredForms, existing)
 
   // --- Print plan (no secrets) ---
   console.log(`Turnstile Reconcile (${APPLY ? 'APPLY' : 'DRY-RUN'})  account=${accountId}`)
-  console.log(`  turnstile-Formulare: ${desiredForms.length}, Widgets im Account: ${existing.length}`)
+  console.log(`  turnstile-Formulare: ${desiredForms.length}, managed Widgets: ${existing.filter(w => w.name.startsWith('cfcf:')).length} (von ${existing.length} gesamt; unmanaged werden ignoriert)`)
   for (const c of plan.create) console.log(`  + CREATE ${c.name}  domains=[${c.domains.join(', ')}]`)
-  for (const a of plan.adopt) console.log(`  ~ ADOPT  "${a.fromName}" → ${a.name}  domains=[${a.domains.join(', ')}]`)
   for (const u of plan.update) console.log(`  ± UPDATE ${u.name}  domains=[${u.domains.join(', ')}]`)
   for (const k of plan.keep) console.log(`  = KEEP   cfcf:${k.formId}`)
   for (const d of plan.delete) console.log(`  - ORPHAN ${d.name}${ALLOW_DELETE ? ' (wird gelöscht)' : ' (bleibt; --allow-delete zum Entfernen)'}`)
@@ -130,12 +129,6 @@ async function main() {
     capture(c.formId, w.sitekey, w.secret)
     created.push({ formId: c.formId, sitekey: w.sitekey })
     console.log(`  ✓ created ${c.name}  sitekey=${w.sitekey}`)
-  }
-  for (const a of plan.adopt) {
-    await cf('PUT', `/accounts/${accountId}/challenges/widgets/${a.sitekey}`, { name: a.name, domains: a.domains, mode: 'managed' })
-    const w = await cf('GET', `/accounts/${accountId}/challenges/widgets/${a.sitekey}`)
-    capture(a.formId, w.sitekey, w.secret)
-    console.log(`  ✓ adopted "${a.fromName}" → ${a.name}  sitekey=${w.sitekey}`)
   }
   for (const u of plan.update) {
     await cf('PUT', `/accounts/${accountId}/challenges/widgets/${u.sitekey}`, { name: u.name, domains: u.domains, mode: 'managed' })

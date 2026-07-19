@@ -33,29 +33,26 @@ const sameDomains = (a, b) => {
   const nb = normDomains(b)
   return na.length === nb.length && na.every((v, i) => v === nb[i])
 }
-// true if every domain the form needs is already covered by the widget
-const covers = (widgetDomains, formDomains) => {
-  const set = new Set(normDomains(widgetDomains))
-  return normDomains(formDomains).every(d => set.has(d))
-}
 
 /**
  * Decide what to do with Turnstile widgets given the desired forms and the
  * widgets currently in the Cloudflare account. Pure function.
  *
+ * Only widgets whose name carries the managed prefix (cfcf:) are ever considered
+ * — unmanaged / hand-created widgets are IGNORED entirely (never read, updated
+ * or deleted). A turnstile form without a managed widget always gets a fresh one.
+ *
  * @param {{formId: string, domains: string[]}[]} desiredForms  forms with turnstile enabled
  * @param {{sitekey: string, name: string, domains: string[]}[]} existingWidgets
- * @param {{allowAdopt?: boolean}} opts
- * @returns {{create,update,adopt,keep,delete}} action lists
+ * @returns {{create,update,keep,delete}} action lists
  */
-export function planReconcile(desiredForms, existingWidgets, opts = {}) {
-  const allowAdopt = opts.allowAdopt !== false
-  const byName = new Map(existingWidgets.map(w => [w.name, w]))
-  const usedSitekeys = new Set()
+export function planReconcile(desiredForms, existingWidgets) {
+  // Consider only managed widgets; everything else is invisible to the planner.
+  const managedWidgets = existingWidgets.filter(w => formIdFromWidgetName(w.name) !== null)
+  const byName = new Map(managedWidgets.map(w => [w.name, w]))
 
   const create = []
   const update = []
-  const adopt = []
   const keep = []
 
   // deterministic order
@@ -65,53 +62,20 @@ export function planReconcile(desiredForms, existingWidgets, opts = {}) {
     const name = widgetName(form.formId)
     const managed = byName.get(name)
 
-    if (managed) {
-      usedSitekeys.add(managed.sitekey)
-      if (sameDomains(managed.domains, form.domains)) {
-        keep.push({ formId: form.formId, sitekey: managed.sitekey })
-      } else {
-        update.push({ formId: form.formId, sitekey: managed.sitekey, name, domains: normDomains(form.domains) })
-      }
-      continue
+    if (!managed) {
+      create.push({ formId: form.formId, name, domains: normDomains(form.domains) })
+    } else if (sameDomains(managed.domains, form.domains)) {
+      keep.push({ formId: form.formId, sitekey: managed.sitekey })
+    } else {
+      update.push({ formId: form.formId, sitekey: managed.sitekey, name, domains: normDomains(form.domains) })
     }
-
-    // No managed widget yet. Try to adopt an unmanaged one that already covers
-    // this form's domains (safe migration of hand-created widgets) — only if
-    // exactly one unambiguous candidate exists.
-    if (allowAdopt) {
-      const candidates = existingWidgets.filter(
-        w =>
-          formIdFromWidgetName(w.name) === null &&
-          !usedSitekeys.has(w.sitekey) &&
-          form.domains.length > 0 &&
-          covers(w.domains, form.domains),
-      )
-      if (candidates.length === 1) {
-        const w = candidates[0]
-        usedSitekeys.add(w.sitekey)
-        adopt.push({
-          formId: form.formId,
-          sitekey: w.sitekey,
-          fromName: w.name,
-          name,
-          domains: normDomains(form.domains),
-          domainsChanged: !sameDomains(w.domains, form.domains),
-        })
-        continue
-      }
-    }
-
-    create.push({ formId: form.formId, name, domains: normDomains(form.domains) })
   }
 
   // Orphans: managed widgets whose formId is no longer a desired form.
   const desiredIds = new Set(forms.map(f => f.formId))
-  const del = existingWidgets
-    .filter(w => {
-      const id = formIdFromWidgetName(w.name)
-      return id !== null && !desiredIds.has(id)
-    })
+  const del = managedWidgets
+    .filter(w => !desiredIds.has(formIdFromWidgetName(w.name)))
     .map(w => ({ formId: formIdFromWidgetName(w.name), sitekey: w.sitekey, name: w.name }))
 
-  return { create, update, adopt, keep, delete: del }
+  return { create, update, keep, delete: del }
 }
