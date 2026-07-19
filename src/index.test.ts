@@ -85,6 +85,14 @@ describe('Contact Form Worker', () => {
       const res = await worker.fetch(req, env)
       expect(res.status).toBe(204)
     })
+
+    it('returns 204 for any localhost origin (any port), even if not listed', async () => {
+      for (const origin of ['http://localhost:5173', 'http://localhost:9999', 'http://127.0.0.1:3000', 'http://[::1]:8080']) {
+        const res = await worker.fetch(makeRequest('OPTIONS', undefined, { Origin: origin }), env)
+        expect(res.status, origin).toBe(204)
+        expect(res.headers.get('Access-Control-Allow-Origin'), origin).toBe(origin)
+      }
+    })
   })
 
   // ==================== Method check ====================
@@ -135,6 +143,20 @@ describe('Contact Form Worker', () => {
         env,
       )
       expect(res.status).toBe(403)
+    })
+
+    it('accepts POST from a localhost origin not listed in the form config', async () => {
+      globalThis.fetch = mockFetch(true, true)
+      // no-turnstile form only lists https://internal.example.com — localhost must still pass
+      const res = await worker.fetch(
+        postRequest(
+          { formId: 'no-turnstile', name: 'Dev', email: 'dev@localhost', message: 'local test' },
+          'http://localhost:5173',
+        ),
+        env,
+      )
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:5173')
     })
   })
 

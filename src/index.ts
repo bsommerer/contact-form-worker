@@ -3,6 +3,26 @@ import { verifyTurnstile } from './turnstile'
 import { buildEmailHtml } from './email-template'
 import type { Env, FieldData, NormalizedSubmission } from './types'
 
+/**
+ * Localhost origins (any port, http/https) are ALWAYS allowed, so local development
+ * works out of the box without listing every dev-server port in each form's
+ * allowedOrigins. Covers localhost, 127.0.0.1 and IPv6 loopback [::1].
+ */
+function isLocalhostOrigin(origin: string): boolean {
+  try {
+    const { hostname, protocol } = new URL(origin)
+    if (protocol !== 'http:' && protocol !== 'https:') return false
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+  } catch {
+    return false
+  }
+}
+
+/** True if the origin is explicitly configured for the form OR a localhost origin. */
+function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
+  return isLocalhostOrigin(origin) || allowedOrigins.includes(origin)
+}
+
 /** Reads the per-form Turnstile secret from the consolidated TURNSTILE_SECRETS JSON map. */
 function getTurnstileSecret(env: Env, formId: string | undefined): string | undefined {
   if (!formId || !env.TURNSTILE_SECRETS) return undefined
@@ -81,7 +101,7 @@ export default {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       const origin = request.headers.get('Origin') ?? ''
-      const allowed = Object.values(FORMS).some(f => f.allowedOrigins.includes(origin))
+      const allowed = isLocalhostOrigin(origin) || Object.values(FORMS).some(f => f.allowedOrigins.includes(origin))
       if (!allowed) return new Response(null, { status: 403 })
       return new Response(null, {
         status: 204,
@@ -112,9 +132,9 @@ export default {
       return jsonResponse({ error: 'Unknown form' }, 404)
     }
 
-    // 2. CORS check
+    // 2. CORS check (localhost is always allowed for local development)
     const origin = request.headers.get('Origin') ?? ''
-    if (!config.allowedOrigins.includes(origin)) {
+    if (!isOriginAllowed(origin, config.allowedOrigins)) {
       return jsonResponse({ error: 'Origin not allowed' }, 403)
     }
 

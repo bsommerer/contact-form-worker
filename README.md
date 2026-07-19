@@ -47,7 +47,7 @@ Formular-Konfiguration ist **Daten, kein Code**. `npm run generate` liest alle `
 | `recipients` | Ja | Empfänger-Adressen (Array, ≥ 1, gültige E-Mails) |
 | `fromName` | Ja | Anzeigename des Absenders |
 | `fromAddress` | Ja¹ | Absende-Adresse (muss bei Resend verifiziert sein) |
-| `allowedOrigins` | Ja | Erlaubte CORS-Origins (Array, `http(s)://…`) |
+| `allowedOrigins` | Ja | Erlaubte CORS-Origins (Array, `http(s)://…`) — nur Produktions-/Staging-Domains; **localhost muss nicht eingetragen werden** (siehe unten) |
 | `headerTitle` | Nein | Überschrift in der E-Mail (Default: „Neue Nachricht") |
 | `defaultSubject` | Nein | Betreff-Fallback, wenn der Client keinen schickt |
 | `turnstile` | Nein | `true` → Cloudflare-Turnstile-Token wird geprüft (Default `false`) |
@@ -63,6 +63,10 @@ Eine optionale `forms/_defaults.json` wird _unter_ jedes Formular gemischt. Idea
 ```
 
 Jedes einzelne Formular kann einen Default überschreiben, indem es das Feld selbst setzt.
+
+### Localhost / lokale Entwicklung
+
+Jeder **localhost**-Origin (`localhost`, `127.0.0.1`, `[::1]` — beliebiger Port, http/https) ist **immer** erlaubt, unabhängig von `allowedOrigins`. So funktioniert lokale Entwicklung out-of-the-box, ohne Dev-Ports pro Formular pflegen zu müssen. In `allowedOrigins` gehören nur echte Produktions-/Staging-Domains.
 
 ### Turnstile
 
