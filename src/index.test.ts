@@ -95,12 +95,88 @@ describe('Contact Form Worker', () => {
     })
   })
 
+  // ==================== Config endpoint ====================
+
+  describe('GET /config/<formId>', () => {
+    const cfgEnv: Env = {
+      RESEND_API_KEY: 'test-resend-key',
+      TURNSTILE_SITEKEYS: JSON.stringify({ 'test-form': '0xSITEKEY_TEST' }),
+    }
+
+    function getConfig(path: string, env2: Env = cfgEnv): Promise<Response> {
+      return worker.fetch(new Request(`https://worker.example.com${path}`, { method: 'GET' }), env2)
+    }
+
+    it('returns the sitekey and turnstile flag for a known form', async () => {
+      const res = await getConfig('/config/test-form')
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+      expect(await res.json()).toEqual({ formId: 'test-form', turnstile: true, sitekey: '0xSITEKEY_TEST' })
+    })
+
+    it('returns sitekey null when none is configured for the form', async () => {
+      const res = await getConfig('/config/no-turnstile')
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ formId: 'no-turnstile', turnstile: false, sitekey: null })
+    })
+
+    it('returns 404 for an unknown form', async () => {
+      const res = await getConfig('/config/nope')
+      expect(res.status).toBe(404)
+      expect(await res.json()).toEqual({ error: 'Unknown form' })
+    })
+
+    it('returns 404 for GET paths that are not /config/<id>', async () => {
+      expect((await getConfig('/')).status).toBe(404)
+      expect((await getConfig('/config/')).status).toBe(404)
+      expect((await getConfig('/other')).status).toBe(404)
+    })
+
+    it('handles a missing TURNSTILE_SITEKEYS gracefully (sitekey null)', async () => {
+      const res = await getConfig('/config/test-form', { RESEND_API_KEY: 'x' })
+      expect(res.status).toBe(200)
+      expect((await res.json() as { sitekey: string | null }).sitekey).toBeNull()
+    })
+  })
+
+  // ==================== Snippet endpoint ====================
+
+  describe('GET /snippet/<formId>', () => {
+    const snEnv: Env = {
+      RESEND_API_KEY: 'x',
+      TURNSTILE_SITEKEYS: JSON.stringify({ 'test-form': '0xSITEKEY_TEST' }),
+    }
+    const getSnippet = (path: string) =>
+      worker.fetch(new Request(`https://worker.example.com${path}`, { method: 'GET' }), snEnv)
+
+    it('returns a text/plain snippet embedding worker URL, formId and sitekey', async () => {
+      const res = await getSnippet('/snippet/test-form')
+      expect(res.status).toBe(200)
+      expect(res.headers.get('Content-Type')).toContain('text/plain')
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+      const body = await res.text()
+      expect(body).toContain("formId: 'test-form'")
+      expect(body).toContain("fetch('https://worker.example.com'")
+      expect(body).toContain('data-sitekey="0xSITEKEY_TEST"') // test-form has turnstile: true
+    })
+
+    it('omits Turnstile in the snippet for a non-turnstile form', async () => {
+      const res = await getSnippet('/snippet/no-turnstile')
+      const body = await res.text()
+      expect(body).not.toContain('cf-turnstile')
+    })
+
+    it('returns 404 for an unknown form', async () => {
+      expect((await getSnippet('/snippet/nope')).status).toBe(404)
+    })
+  })
+
   // ==================== Method check ====================
 
   describe('HTTP method validation', () => {
-    it('returns 405 for GET', async () => {
+    it('returns 404 for GET on a non-/config path (GET is used by /config)', async () => {
       const res = await worker.fetch(makeRequest('GET'), env)
-      expect(res.status).toBe(405)
+      expect(res.status).toBe(404)
     })
 
     it('returns 405 for PUT', async () => {

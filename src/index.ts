@@ -1,6 +1,7 @@
 import { FORMS } from './config'
 import { verifyTurnstile } from './turnstile'
 import { buildEmailHtml } from './email-template'
+import { buildSnippet } from './snippet'
 import type { Env, FieldData, NormalizedSubmission } from './types'
 
 /**
@@ -32,6 +33,18 @@ function getTurnstileSecret(env: Env, formId: string | undefined): string | unde
   } catch {
     console.error('TURNSTILE_SECRETS is not valid JSON')
     return undefined
+  }
+}
+
+/** Reads the per-form Turnstile sitekey (public) from the TURNSTILE_SITEKEYS JSON map. */
+function getTurnstileSitekey(env: Env, formId: string): string | null {
+  if (!env.TURNSTILE_SITEKEYS) return null
+  try {
+    const map = JSON.parse(env.TURNSTILE_SITEKEYS) as Record<string, string>
+    return map[formId] ?? null
+  } catch {
+    console.error('TURNSTILE_SITEKEYS is not valid JSON')
+    return null
   }
 }
 
@@ -112,6 +125,44 @@ export default {
           'Access-Control-Max-Age': '86400',
         },
       })
+    }
+
+    // Public GET endpoints (sitekey/snippet are public, so open to any origin):
+    //   GET /config/<formId>   → { formId, turnstile, sitekey }
+    //   GET /snippet/<formId>  → copy-paste HTML+JS snippet (text/plain)
+    if (request.method === 'GET') {
+      const url = new URL(request.url)
+
+      const configMatch = url.pathname.match(/^\/config\/([a-z0-9][a-z0-9-]*)$/)
+      if (configMatch) {
+        const cfgFormId = configMatch[1]
+        const cfg = FORMS[cfgFormId]
+        if (!cfg) return jsonResponse({ error: 'Unknown form' }, 404, '*')
+        return jsonResponse(
+          { formId: cfgFormId, turnstile: !!cfg.turnstile, sitekey: getTurnstileSitekey(env, cfgFormId) },
+          200,
+          '*',
+        )
+      }
+
+      const snippetMatch = url.pathname.match(/^\/snippet\/([a-z0-9][a-z0-9-]*)$/)
+      if (snippetMatch) {
+        const snFormId = snippetMatch[1]
+        const cfg = FORMS[snFormId]
+        if (!cfg) return jsonResponse({ error: 'Unknown form' }, 404, '*')
+        const snippet = buildSnippet({
+          formId: snFormId,
+          workerUrl: url.origin,
+          turnstile: !!cfg.turnstile,
+          sitekey: getTurnstileSitekey(env, snFormId),
+        })
+        return new Response(snippet, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' },
+        })
+      }
+
+      return jsonResponse({ error: 'Not found' }, 404)
     }
 
     if (request.method !== 'POST') {

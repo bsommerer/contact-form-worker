@@ -1,0 +1,63 @@
+name: Turnstile reconcile dry-run (reusable)
+
+# Reusable workflow: prints the Turnstile reconcile PLAN for the caller's forms
+# WITHOUT creating, adopting, updating or deleting anything. Use it to preview
+# what a deploy would do (e.g. before the first automated run).
+#
+# Usage from a config repo (.github/workflows/turnstile-dryrun.yml):
+#   on: { workflow_dispatch: {} }
+#   jobs:
+#     dryrun:
+#       uses: bsommerer/contact-form-worker/.github/workflows/reconcile-dryrun.yml@main
+#       secrets:
+#         CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}  # optional
+
+on:
+  workflow_call:
+    inputs:
+      engine_ref:
+        type: string
+        default: main
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: false
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout config repo (caller)
+        uses: actions/checkout@v4
+        with:
+          path: config
+
+      - name: Checkout engine
+        uses: actions/checkout@v4
+        with:
+          repository: bsommerer/contact-form-worker
+          ref: ${{ inputs.engine_ref }}
+          path: engine
+
+      - name: Inject forms from config repo
+        run: |
+          rm -rf engine/forms
+          cp -r config/forms engine/forms
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: engine/.nvmrc
+          cache: npm
+          cache-dependency-path: engine/package-lock.json
+
+      - run: npm ci
+        working-directory: engine
+
+      - name: Reconcile (dry-run)
+        working-directory: engine
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/reconcile-turnstile.mjs | tee "$GITHUB_STEP_SUMMARY"

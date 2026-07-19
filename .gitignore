@@ -5,3 +5,8 @@ dist/
 
 # Build-Artefakt aus forms/*.json (via npm run generate)
 src/forms.generated.ts
+
+# Reconcile-Outputs (enthalten ggf. Secrets) — nie committen
+turnstile-secrets.json
+turnstile-sitekeys.json
+turnstile-summary.json

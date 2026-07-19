@@ -4,14 +4,22 @@ name: Deploy (reusable)
 # with ITS OWN forms/ and secrets. The engine repo itself does NOT auto-deploy —
 # production is driven entirely by the config repo (GitOps).
 #
+# Turnstile widgets are reconciled automatically: for every form with
+# "turnstile": true a managed widget (cfcf:<formId>) is created/adopted in
+# Cloudflare, and its sitekey/secret are synced to the worker. Secrets are read
+# from Cloudflare, never stored in GitHub, and masked out of the logs.
+#
 # Usage from a config repo (.github/workflows/deploy.yml):
 #   jobs:
 #     deploy:
 #       uses: bsommerer/contact-form-worker/.github/workflows/deploy.yml@main
+#       permissions:
+#         contents: read
+#         pull-requests: write   # for the sitekey PR comment (optional)
 #       secrets:
-#         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-#         RESEND_API_KEY:       ${{ secrets.RESEND_API_KEY }}
-#         TURNSTILE_SECRETS:    ${{ secrets.TURNSTILE_SECRETS }}
+#         CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+#         RESEND_API_KEY:        ${{ secrets.RESEND_API_KEY }}
+#         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}  # optional
 
 on:
   workflow_call:
@@ -20,12 +28,16 @@ on:
         description: Git ref (tag/branch) of the engine to build from
         type: string
         default: main
+      delete_orphan_widgets:
+        description: Delete managed Turnstile widgets whose form was removed
+        type: boolean
+        default: false
     secrets:
       CLOUDFLARE_API_TOKEN:
         required: true
       RESEND_API_KEY:
         required: true
-      TURNSTILE_SECRETS:
+      CLOUDFLARE_ACCOUNT_ID:
         required: false
 
 jobs:
@@ -65,6 +77,17 @@ jobs:
           npm run typecheck
           npm test
 
+      - name: Reconcile Turnstile widgets
+        working-directory: engine
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TURNSTILE_SECRETS_OUT: ${{ runner.temp }}/turnstile-secrets.json
+          TURNSTILE_SITEKEYS_OUT: ${{ runner.temp }}/turnstile-sitekeys.json
+          RECONCILE_SUMMARY_OUT: ${{ runner.temp }}/turnstile-summary.json
+        run: |
+          node scripts/reconcile-turnstile.mjs --apply ${{ inputs.delete_orphan_widgets && '--allow-delete' || '' }}
+
       - name: Deploy to Cloudflare
         working-directory: engine
         run: npx wrangler deploy
@@ -76,9 +99,35 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          TURNSTILE_SECRETS: ${{ secrets.TURNSTILE_SECRETS }}
+          SECRETS_FILE: ${{ runner.temp }}/turnstile-secrets.json
+          SITEKEYS_FILE: ${{ runner.temp }}/turnstile-sitekeys.json
         run: |
           printf '%s' "$RESEND_API_KEY" | npx wrangler secret put RESEND_API_KEY
-          if [ -n "$TURNSTILE_SECRETS" ]; then
-            printf '%s' "$TURNSTILE_SECRETS" | npx wrangler secret put TURNSTILE_SECRETS
+          if [ -s "$SECRETS_FILE" ] && [ "$(cat "$SECRETS_FILE")" != "{}" ]; then
+            npx wrangler secret put TURNSTILE_SECRETS < "$SECRETS_FILE"
+          fi
+          if [ -s "$SITEKEYS_FILE" ] && [ "$(cat "$SITEKEYS_FILE")" != "{}" ]; then
+            npx wrangler secret put TURNSTILE_SITEKEYS < "$SITEKEYS_FILE"
+          fi
+
+      - name: Report sitekeys (job summary + PR comment)
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUMMARY_FILE: ${{ runner.temp }}/turnstile-summary.json
+        run: |
+          [ -f "$SUMMARY_FILE" ] || exit 0
+          {
+            echo "### Turnstile Sitekeys (public)"
+            echo ""
+            echo '```json'
+            cat "$SUMMARY_FILE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # best-effort comment on the merged PR, if any is associated with this commit
+          PR=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$PR" ] && [ "$PR" != "null" ]; then
+            BODY=$(printf 'Turnstile-Sitekeys (öffentlich) für dieses Deployment:\n\n```json\n%s\n```' "$(cat "$SUMMARY_FILE")")
+            gh pr comment "$PR" --repo "${{ github.repository }}" --body "$BODY" || true
           fi

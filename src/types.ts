@@ -3,6 +3,9 @@ export interface Env {
   // JSON-Map formId -> Turnstile-Secret, z.B. {"my-site":"0x…"}.
   // Wird als EIN Cloudflare-Secret gepflegt (siehe README / Deploy-Workflow).
   TURNSTILE_SECRETS?: string
+  // JSON-Map formId -> Turnstile-Sitekey (ÖFFENTLICH). Vom Reconcile-Schritt
+  // gesetzt; über GET /config/<formId> abrufbar.
+  TURNSTILE_SITEKEYS?: string
 }
 
 export interface FormConfig {
