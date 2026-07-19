@@ -1,6 +1,6 @@
 export interface Env {
   RESEND_API_KEY: string
-  // JSON-Map formId -> Turnstile-Secret, z.B. {"bs-itservices":"0x…"}.
+  // JSON-Map formId -> Turnstile-Secret, z.B. {"my-site":"0x…"}.
   // Wird als EIN Cloudflare-Secret gepflegt (siehe README / Deploy-Workflow).
   TURNSTILE_SECRETS?: string
 }

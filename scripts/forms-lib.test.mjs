@@ -81,16 +81,16 @@ describe('buildForms', () => {
   it('merges _defaults underneath each form', () => {
     const { forms, errors } = buildForms(
       { a: { recipients: ['a@x.de'], fromName: 'A', allowedOrigins: ['https://a.de'] } },
-      { fromAddress: 'noreply@bsitservices.de' },
+      { fromAddress: 'noreply@example.com' },
     )
     expect(errors).toEqual([])
-    expect(forms.a.fromAddress).toBe('noreply@bsitservices.de')
+    expect(forms.a.fromAddress).toBe('noreply@example.com')
   })
 
   it('lets a form override a default', () => {
     const { forms } = buildForms(
       { a: { ...valid, fromAddress: 'custom@x.de' } },
-      { fromAddress: 'noreply@bsitservices.de' },
+      { fromAddress: 'noreply@example.com' },
     )
     expect(forms.a.fromAddress).toBe('custom@x.de')
   })

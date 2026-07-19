@@ -1,0 +1,4 @@
+# Lokale Secrets für `npm run dev` — kopiere nach .dev.vars (gitignored) und fülle aus.
+RESEND_API_KEY=re_your_key_here
+# JSON-Map formId -> Turnstile-Secret (nur Formulare mit "turnstile": true)
+TURNSTILE_SECRETS={"my-site":"0x_your_turnstile_secret"}
